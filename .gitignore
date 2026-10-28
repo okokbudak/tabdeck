@@ -1,0 +1,12 @@
+# Gizli dosyalar
+agent/agent.json
+*.jks
+*.keystore
+keystore.properties
+.env
+
+# Derleme çıktıları ve yerel dosyalar
+agent/*.exe
+agent/screenshots/
+tools/node_modules/
+_work/

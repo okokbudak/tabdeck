@@ -1,0 +1,8 @@
+{
+  "name": "tabdeck-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "simple-icons": "16.34.0"
+  }
+}
