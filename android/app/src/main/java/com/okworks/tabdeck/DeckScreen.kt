@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -78,13 +79,17 @@ fun DeckApp(vm: DeckViewModel) {
         }
     }
 
-    suspend fun press(b: DeckButton): Boolean = when (b.action.type) {
-        "none" -> true
-        "page" -> { vm.goToPage(b.action.value); true }
+    suspend fun press(b: DeckButton): PressResult = when (b.action.type) {
+        "none" -> PressResult(true)
+        "page" -> { vm.goToPage(b.action.value); PressResult(true) }
         else -> {
             val r = vm.client.run(b.action)
             r.exceptionOrNull()?.let { toast(it.message ?: "Hata") }
-            r.isSuccess
+            // Ses komutları yeni seviyeyi döndürür; butonun üstünde kısa süre gösterilir
+            val badge = r.getOrNull()?.takeIf { it.has("level") }?.let {
+                if (it.optBoolean("muted")) "🔇" else "%${it.optInt("level")}"
+            }
+            PressResult(r.isSuccess, badge)
         }
     }
 
@@ -221,7 +226,7 @@ private fun TopBar(
 private fun DeckGrid(
     vm: DeckViewModel,
     moveFrom: Int?,
-    onPress: suspend (DeckButton) -> Boolean,
+    onPress: suspend (DeckButton) -> PressResult,
     onEditTap: (Int) -> Unit,
     onEditLongPress: (Int) -> Unit,
 ) {
@@ -259,7 +264,7 @@ fun DeckKey(
     size: Dp,
     editMode: Boolean,
     selected: Boolean = false,
-    onPress: suspend (DeckButton) -> Boolean = { true },
+    onPress: suspend (DeckButton) -> PressResult = { PressResult(true) },
     onEditTap: () -> Unit = {},
     onEditLongPress: () -> Unit = {},
 ) {
@@ -268,6 +273,8 @@ fun DeckKey(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     var flash by remember(button?.id) { mutableStateOf<Boolean?>(null) }
+    var badge by remember(button?.id) { mutableStateOf<String?>(null) }
+    var badgeJob by remember { mutableStateOf<Job?>(null) }
 
     val scale by animateFloatAsState(if (pressed) 0.92f else 1f, label = "scale")
     val base = button?.let { Color(it.color) } ?: Color(0xFF1A1C21)
@@ -302,7 +309,13 @@ fun DeckKey(
                     } else if (button != null) {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         scope.launch {
-                            flash = onPress(button)
+                            val r = onPress(button)
+                            flash = r.ok
+                            if (r.badge != null) {
+                                badge = r.badge
+                                badgeJob?.cancel()
+                                badgeJob = scope.launch { delay(1200); badge = null }
+                            }
                             delay(300)
                             flash = null
                         }
@@ -336,9 +349,23 @@ fun DeckKey(
                     )
                 }
             }
+            badge?.let {
+                Box(
+                    Modifier.matchParentSize().background(Color(0xB0000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        it, color = Color.White, fontWeight = FontWeight.Bold,
+                        fontSize = with(density) { (size * 0.26f).toSp() },
+                    )
+                }
+            }
         }
     }
 }
+
+/** Buton basma sonucu: başarı ve (ses komutlarında) butonda kısa süre gösterilecek metin. */
+data class PressResult(val ok: Boolean, val badge: String? = null)
 
 private fun lerpColor(a: Color, b: Color, t: Float) = Color(
     red = a.red + (b.red - a.red) * t,

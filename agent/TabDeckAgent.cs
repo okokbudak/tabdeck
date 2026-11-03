@@ -31,6 +31,7 @@ namespace TabDeck
         public string obsUrl = "ws://127.0.0.1:4455";
         public string obsPassword = "";
         public string screenshotDir = ""; // bos = agent klasoru\screenshots
+        public bool runAsAdmin = false;   // true = her acilista yonetici olarak yeniden basla
     }
 
     static class Program
@@ -47,9 +48,51 @@ namespace TabDeck
                 ShellApps.Test(args[1]);
                 return;
             }
+            if (args.Length == 1 && args[0] == "--test-audio")
+            {
+                TestAudio();
+                return;
+            }
+            if (args.Length == 4 && args[0] == "--appvolume")
+            {
+                // Komut satirindan: TabDeckAgent.exe --appvolume Spotify set 40
+                var r = CoreAudio.AppVolume(args[1], args[2], int.Parse(args[3]));
+                Console.WriteLine(args[1] + ": %" + r["level"] + " sessiz=" + r["muted"]);
+                return;
+            }
+            if (args.Length == 1 && args[0] == "--test-appaudio")
+            {
+                // Gelistirme testi: ses karistiricisini listeler; ilk uygulamada +5 / -5 / sessiz x2 dener
+                var apps = CoreAudio.ListApps();
+                foreach (var app in apps)
+                    Console.WriteLine(string.Format("{0,-22} {1,-30} %{2,-4} sessiz={3}", app["name"], app["title"], app["level"], app["muted"]));
+                if (apps.Count > 0)
+                {
+                    string n = (string)apps[0]["name"];
+                    Console.WriteLine(n + " +5   -> %" + CoreAudio.AppVolume(n, "up", 5)["level"]);
+                    Console.WriteLine(n + " -5   -> %" + CoreAudio.AppVolume(n, "down", 5)["level"]);
+                    Console.WriteLine(n + " mute -> " + CoreAudio.AppVolume(n, "mute", 0)["muted"]);
+                    Console.WriteLine(n + " mute -> " + CoreAudio.AppVolume(n, "mute", 0)["muted"]);
+                }
+                return;
+            }
+            if (args.Length == 1 && args[0] == "--test-foreground")
+            {
+                Console.WriteLine("engelleyen on plan: " + (Elevation.BlockingForeground() ?? "(yok)"));
+                return;
+            }
             cfg = LoadConfig();
             Obs.Url = cfg.obsUrl;
             Obs.Password = cfg.obsPassword;
+
+            bool wantAdmin = cfg.runAsAdmin || Array.IndexOf(args, "--admin") >= 0;
+            bool admin = Elevation.IsSelfElevated();
+            if (wantAdmin && !admin)
+            {
+                if (Elevation.Relaunch()) return;
+                Console.WriteLine("Yonetici izni verilmedi; normal yetkiyle devam ediliyor.");
+            }
+            Console.Title = admin ? "TabDeck Agent (yonetici)" : "TabDeck Agent";
 
             var listener = new TcpListener(IPAddress.Any, cfg.port);
             try { listener.Start(); }
@@ -65,6 +108,8 @@ namespace TabDeck
             Console.WriteLine(" Port : " + cfg.port);
             Console.WriteLine(" Token: " + cfg.token);
             foreach (var ip in LocalIps()) Console.WriteLine(" IP   : " + ip);
+            Console.WriteLine(" Yetki: " + (admin ? "yonetici (yonetici olarak calisan oyunlarda da tus gonderir)"
+                : "normal (yonetici olarak calisan oyunlarda kisayollar engellenir)"));
             Console.WriteLine(" Tablette bu IP, port ve token'i girin.");
             Console.WriteLine("==============================================");
 
@@ -87,7 +132,7 @@ namespace TabDeck
             if (c == null) c = new Config();
             if (string.IsNullOrEmpty(c.token))
             {
-                c.token = new Random().Next(100000, 999999).ToString();
+                c.token = new Random().Next(10000000, 99999999).ToString();
                 File.WriteAllText(path, Json.Serialize(c));
             }
             return c;
@@ -98,6 +143,25 @@ namespace TabDeck
             foreach (var a in Dns.GetHostEntry(Dns.GetHostName()).AddressList)
                 if (a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a))
                     yield return a.ToString();
+        }
+
+        /// Gelistirme testi: ses seviyesini Core Audio ve WM_APPCOMMAND ile bir adim artirip geri alir.
+        static void TestAudio()
+        {
+            Console.WriteLine("baslangic : " + CoreAudio.Level().ToString("0.00") + " sessiz=" + CoreAudio.Muted());
+            CoreAudio.StepUp(); Thread.Sleep(200);
+            Console.WriteLine("CoreAudio+: " + CoreAudio.Level().ToString("0.00"));
+            CoreAudio.StepDown(); Thread.Sleep(200);
+            Console.WriteLine("CoreAudio-: " + CoreAudio.Level().ToString("0.00"));
+            AppCommand.Send(AppCommand.VOLUME_UP); Thread.Sleep(500);
+            Console.WriteLine("APPCMD +  : " + CoreAudio.Level().ToString("0.00"));
+            AppCommand.Send(AppCommand.VOLUME_DOWN); Thread.Sleep(500);
+            Console.WriteLine("APPCMD -  : " + CoreAudio.Level().ToString("0.00"));
+            CoreAudio.ToggleMute(); Thread.Sleep(200);
+            bool m1 = CoreAudio.Muted();
+            CoreAudio.ToggleMute(); Thread.Sleep(200);
+            Console.WriteLine("sessiz    : " + m1 + " -> " + CoreAudio.Muted());
+            Console.WriteLine("yonetici  : " + Elevation.IsSelfElevated());
         }
 
         // ---------- Minimal HTTP ----------
@@ -130,8 +194,15 @@ namespace TabDeck
                     }
                     object result;
                     int status = 200;
-                    if (tok != cfg.token)
+                    string ip = ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString();
+                    if (TokenGuard.IsBlocked(ip))
                     {
+                        status = 429;
+                        result = Err("Cok fazla hatali token denemesi; 60 sn sonra tekrar deneyin");
+                    }
+                    else if (tok != cfg.token)
+                    {
+                        TokenGuard.Fail(ip);
                         status = 401;
                         result = Err("Gecersiz token");
                     }
@@ -145,6 +216,8 @@ namespace TabDeck
                         WriteResponse(stream, 200, "image/png", ShellApps.IconPng(id ?? "", Math.Max(16, Math.Min(256, size))));
                         return;
                     }
+                    else if (method == "GET" && path == "/audio/apps")
+                        result = new Dictionary<string, object> { { "ok", true }, { "apps", CoreAudio.ListApps() } };
                     else if (method == "GET" && path == "/apps")
                         result = new Dictionary<string, object> { { "ok", true }, { "apps", ShellApps.List() } };
                     else if (method == "GET" && path == "/ping")
@@ -235,6 +308,16 @@ namespace TabDeck
 
         // ---------- Aksiyonlar ----------
 
+        /// Tus gonderildikten sonra: on plandaki pencere yonetici olarak calisiyorsa Windows (UIPI)
+        /// tuslari sessizce engeller. Bunu tablete acik bir hata olarak bildir.
+        static object InputResult()
+        {
+            string blocker = Elevation.BlockingForeground();
+            if (blocker == null) return Ok();
+            return Err(blocker + " yonetici olarak calisiyor; Windows bu yuzden tuslari engelliyor. "
+                + "TabDeck Agent'i yonetici olarak baslatin (Baslat > TabDeck Agent (yonetici)).");
+        }
+
         static object RunAction(Dictionary<string, object> a)
         {
             string type = Str(a, "type");
@@ -243,11 +326,11 @@ namespace TabDeck
             {
                 case "hotkey":
                     Input.SendHotkey(Str(a, "value"));
-                    return Ok();
+                    return InputResult();
                 case "text":
                     Input.TypeText(Str(a, "value"));
                     if (Str(a, "arg") == "enter") Input.SendHotkey("enter");
-                    return Ok();
+                    return InputResult();
                 case "launch":
                     {
                         string target = Str(a, "value");
@@ -267,8 +350,18 @@ namespace TabDeck
                         return Ok();
                     }
                 case "media":
-                    Input.SendMedia(Str(a, "value"));
-                    return Ok();
+                    {
+                        string cmd = Str(a, "value");
+                        Input.SendMedia(cmd);
+                        return cmd == "volup" || cmd == "voldown" || cmd == "mute" ? (object)CoreAudio.MasterStatus() : Ok();
+                    }
+                case "appvolume":
+                    {
+                        int amount;
+                        string op = Str(a, "arg");
+                        if (!int.TryParse(Str(a, "arg2"), out amount)) amount = op == "set" ? 50 : 5;
+                        return CoreAudio.AppVolume(Str(a, "value"), op == "" ? "up" : op, amount);
+                    }
                 case "obs":
                     return ObsAction(Str(a, "value"), Str(a, "arg"), Str(a, "arg2"));
                 default:
@@ -482,21 +575,408 @@ namespace TabDeck
             Send(list);
         }
 
+        /// Medya ve ses tus gondermeden yapilir; boylece yonetici olarak calisan bir oyun
+        /// on plandayken de calisir (UIPI yalnizca enjekte edilen tuslari engeller).
         public static void SendMedia(string cmd)
         {
-            string key;
             switch (cmd)
             {
-                case "playpause": key = "playpause"; break;
-                case "next": key = "nexttrack"; break;
-                case "prev": key = "prevtrack"; break;
-                case "stop": key = "stop"; break;
-                case "volup": key = "volumeup"; break;
-                case "voldown": key = "volumedown"; break;
-                case "mute": key = "volumemute"; break;
+                case "playpause": AppCommand.Send(AppCommand.PLAY_PAUSE); break;
+                case "next": AppCommand.Send(AppCommand.NEXT); break;
+                case "prev": AppCommand.Send(AppCommand.PREV); break;
+                case "stop": AppCommand.Send(AppCommand.STOP); break;
+                case "volup": CoreAudio.StepUp(); break;
+                case "voldown": CoreAudio.StepDown(); break;
+                case "mute": CoreAudio.ToggleMute(); break;
                 default: throw new Exception("Bilinmeyen medya komutu: " + cmd);
             }
-            SendHotkey(key);
+        }
+    }
+
+    // ---------- Token deneme siniri ----------
+
+    /// Ayni IP'den 60 sn icinde 5 hatali token denemesinden sonra 60 sn engeller.
+    static class TokenGuard
+    {
+        class Entry { public int Count; public DateTime WindowStart; public DateTime BlockedUntil; }
+        static readonly Dictionary<string, Entry> Entries = new Dictionary<string, Entry>();
+
+        public static bool IsBlocked(string ip)
+        {
+            lock (Entries)
+            {
+                Entry e;
+                return Entries.TryGetValue(ip, out e) && e.BlockedUntil > DateTime.UtcNow;
+            }
+        }
+
+        public static void Fail(string ip)
+        {
+            lock (Entries)
+            {
+                var now = DateTime.UtcNow;
+                Entry e;
+                if (!Entries.TryGetValue(ip, out e)) Entries[ip] = e = new Entry { WindowStart = now };
+                if (now - e.WindowStart > TimeSpan.FromSeconds(60)) { e.WindowStart = now; e.Count = 0; }
+                if (++e.Count >= 5)
+                {
+                    e.BlockedUntil = now.AddSeconds(60);
+                    e.Count = 0;
+                    Console.WriteLine(DateTime.Now.ToString("HH:mm:ss") + "  " + ip + " hatali token nedeniyle 60 sn engellendi");
+                }
+            }
+        }
+    }
+
+    // ---------- Medya komutlari (WM_APPCOMMAND) ----------
+
+    static class AppCommand
+    {
+        public const int VOLUME_MUTE = 8, VOLUME_DOWN = 9, VOLUME_UP = 10;
+        public const int NEXT = 11, PREV = 12, STOP = 13, PLAY_PAUSE = 14;
+        const int WM_APPCOMMAND = 0x0319;
+        const int WS_POPUP = unchecked((int)0x80000000);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr CreateWindowEx(int exStyle, string cls, string name, int style,
+            int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
+
+        [DllImport("user32.dll")]
+        static extern bool DestroyWindow(IntPtr h);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+
+        /// Kendi gizli penceremize WM_APPCOMMAND gonderir; DefWindowProc bunu shell'e iletir ve
+        /// Windows komutu etkin medya oturumuna (Spotify, tarayici...) uygular.
+        public static void Send(int command)
+        {
+            IntPtr h = CreateWindowEx(0, "STATIC", "TabDeck", WS_POPUP, 0, 0, 0, 0,
+                IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            if (h == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+            try { SendMessage(h, WM_APPCOMMAND, h, (IntPtr)(command << 16)); }
+            finally { DestroyWindow(h); }
+        }
+    }
+
+    // ---------- Ana ses seviyesi (Core Audio) ----------
+
+    static class CoreAudio
+    {
+        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+        class MMDeviceEnumerator { }
+
+        [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDeviceEnumerator
+        {
+            [PreserveSig] int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
+            [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice device);
+        }
+
+        [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDeviceCollection
+        {
+            [PreserveSig] int GetCount(out uint count);
+            [PreserveSig] int Item(uint index, out IMMDevice device);
+        }
+
+        [ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioSessionManager2
+        {
+            [PreserveSig] int GetAudioSessionControl(IntPtr guid, int flags, out IntPtr control);
+            [PreserveSig] int GetSimpleAudioVolume(IntPtr guid, int flags, out IntPtr volume);
+            [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator sessions);
+        }
+
+        [ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioSessionEnumerator
+        {
+            [PreserveSig] int GetCount(out int count);
+            [PreserveSig] int GetSession(int index, out IAudioSessionControl2 session);
+        }
+
+        [ComImport, Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioSessionControl2
+        {
+            // IAudioSessionControl
+            [PreserveSig] int GetState(out int state);
+            [PreserveSig] int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+            [PreserveSig] int SetDisplayName(string name, ref Guid ctx);
+            [PreserveSig] int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string path);
+            [PreserveSig] int SetIconPath(string path, ref Guid ctx);
+            [PreserveSig] int GetGroupingParam(out Guid param);
+            [PreserveSig] int SetGroupingParam(ref Guid param, ref Guid ctx);
+            [PreserveSig] int RegisterAudioSessionNotification(IntPtr notify);
+            [PreserveSig] int UnregisterAudioSessionNotification(IntPtr notify);
+            // IAudioSessionControl2
+            [PreserveSig] int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+            [PreserveSig] int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+            [PreserveSig] int GetProcessId(out uint pid);
+            [PreserveSig] int IsSystemSoundsSession();
+            [PreserveSig] int SetDuckingPreference(bool optOut);
+        }
+
+        [ComImport, Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface ISimpleAudioVolume
+        {
+            [PreserveSig] int SetMasterVolume(float level, ref Guid ctx);
+            [PreserveSig] int GetMasterVolume(out float level);
+            [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid ctx);
+            [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
+        }
+
+        [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDevice
+        {
+            [PreserveSig] int Activate(ref Guid iid, int clsCtx, IntPtr activationParams,
+                [MarshalAs(UnmanagedType.IUnknown)] out object iface);
+        }
+
+        [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioEndpointVolume
+        {
+            [PreserveSig] int RegisterControlChangeNotify(IntPtr notify);
+            [PreserveSig] int UnregisterControlChangeNotify(IntPtr notify);
+            [PreserveSig] int GetChannelCount(out uint count);
+            [PreserveSig] int SetMasterVolumeLevel(float db, ref Guid ctx);
+            [PreserveSig] int SetMasterVolumeLevelScalar(float level, ref Guid ctx);
+            [PreserveSig] int GetMasterVolumeLevel(out float db);
+            [PreserveSig] int GetMasterVolumeLevelScalar(out float level);
+            [PreserveSig] int SetChannelVolumeLevel(uint channel, float db, ref Guid ctx);
+            [PreserveSig] int SetChannelVolumeLevelScalar(uint channel, float level, ref Guid ctx);
+            [PreserveSig] int GetChannelVolumeLevel(uint channel, out float db);
+            [PreserveSig] int GetChannelVolumeLevelScalar(uint channel, out float level);
+            [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid ctx);
+            [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
+            [PreserveSig] int GetVolumeStepInfo(out uint step, out uint stepCount);
+            [PreserveSig] int VolumeStepUp(ref Guid ctx);
+            [PreserveSig] int VolumeStepDown(ref Guid ctx);
+        }
+
+        static IAudioEndpointVolume Endpoint()
+        {
+            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+            IMMDevice device;
+            Check(enumerator.GetDefaultAudioEndpoint(0 /* eRender */, 1 /* eMultimedia */, out device));
+            Guid iid = typeof(IAudioEndpointVolume).GUID;
+            object o;
+            Check(device.Activate(ref iid, 23 /* CLSCTX_ALL */, IntPtr.Zero, out o));
+            return (IAudioEndpointVolume)o;
+        }
+
+        static void Check(int hr) { if (hr != 0) Marshal.ThrowExceptionForHR(hr); }
+
+        public static void StepUp() { Guid g = Guid.Empty; Check(Endpoint().VolumeStepUp(ref g)); }
+
+        public static void StepDown() { Guid g = Guid.Empty; Check(Endpoint().VolumeStepDown(ref g)); }
+
+        public static void ToggleMute()
+        {
+            var ep = Endpoint();
+            bool muted;
+            Check(ep.GetMute(out muted));
+            Guid g = Guid.Empty;
+            Check(ep.SetMute(!muted, ref g));
+        }
+
+        public static float Level()
+        {
+            float v;
+            Check(Endpoint().GetMasterVolumeLevelScalar(out v));
+            return v;
+        }
+
+        // ----- Uygulama bazli ses (Windows ses karistiricisindaki oturumlar) -----
+
+        class Session
+        {
+            public string Process;   // ornek: "Spotify"
+            public string Title;     // ornek: "Spotify Premium" ya da dosya aciklamasi
+            public ISimpleAudioVolume Volume;
+        }
+
+        /// Tum etkin cikis aygitlarindaki ses oturumlari (suresi dolmuslar ve sistem sesleri haric).
+        static List<Session> Sessions()
+        {
+            var list = new List<Session>();
+            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+            IMMDeviceCollection devices;
+            Check(enumerator.EnumAudioEndpoints(0 /* eRender */, 1 /* DEVICE_STATE_ACTIVE */, out devices));
+            uint deviceCount;
+            Check(devices.GetCount(out deviceCount));
+            Guid iid = typeof(IAudioSessionManager2).GUID;
+            for (uint d = 0; d < deviceCount; d++)
+            {
+                IMMDevice device;
+                if (devices.Item(d, out device) != 0) continue;
+                object o;
+                if (device.Activate(ref iid, 23, IntPtr.Zero, out o) != 0) continue;
+                IAudioSessionEnumerator sessions;
+                if (((IAudioSessionManager2)o).GetSessionEnumerator(out sessions) != 0) continue;
+                int count;
+                sessions.GetCount(out count);
+                for (int i = 0; i < count; i++)
+                {
+                    IAudioSessionControl2 ctl;
+                    if (sessions.GetSession(i, out ctl) != 0) continue;
+                    int state;
+                    ctl.GetState(out state);
+                    if (state == 2 /* Expired */ || ctl.IsSystemSoundsSession() == 0) continue;
+                    uint pid;
+                    ctl.GetProcessId(out pid);
+                    if (pid == 0) continue;
+                    string name, title = null;
+                    try
+                    {
+                        var p = System.Diagnostics.Process.GetProcessById((int)pid);
+                        name = p.ProcessName;
+                        try { title = p.MainModule.FileVersionInfo.FileDescription; } catch { }
+                    }
+                    catch { continue; }
+                    string display;
+                    ctl.GetDisplayName(out display);
+                    if (!string.IsNullOrEmpty(display) && !display.StartsWith("@")) title = display;
+                    list.Add(new Session { Process = name, Title = string.IsNullOrEmpty(title) ? name : title, Volume = (ISimpleAudioVolume)ctl });
+                }
+            }
+            return list;
+        }
+
+        /// Ses karistiricisindaki uygulamalar: [{name, title, level, muted}] (ayni surec bir kez).
+        public static List<Dictionary<string, object>> ListApps()
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<Dictionary<string, object>>();
+            foreach (var s in Sessions())
+            {
+                if (!seen.Add(s.Process)) continue;
+                float level;
+                bool muted;
+                s.Volume.GetMasterVolume(out level);
+                s.Volume.GetMute(out muted);
+                result.Add(new Dictionary<string, object> {
+                    { "name", s.Process }, { "title", s.Title },
+                    { "level", (int)Math.Round(level * 100) }, { "muted", muted } });
+            }
+            result.Sort((a, b) => string.Compare((string)a["title"], (string)b["title"], StringComparison.CurrentCultureIgnoreCase));
+            return result;
+        }
+
+        /// Bir uygulamanin (surec adi) tum ses oturumlarina uygular. op: up | down | mute | set.
+        /// amount: up/down icin yuzde adim, set icin hedef yuzde. Yeni seviye ve sessiz durumu doner.
+        public static Dictionary<string, object> AppVolume(string process, string op, int amount)
+        {
+            process = process.Trim();
+            if (process.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) process = process.Substring(0, process.Length - 4);
+            var matches = Sessions().FindAll(s => string.Equals(s.Process, process, StringComparison.OrdinalIgnoreCase));
+            if (matches.Count == 0)
+                throw new Exception(process + " su an ses karistiricisinda yok (uygulama kapali ya da hic ses calmadi)");
+
+            float level;
+            bool muted;
+            matches[0].Volume.GetMasterVolume(out level);
+            matches[0].Volume.GetMute(out muted);
+            switch (op)
+            {
+                case "up": level = Math.Min(1f, level + amount / 100f); muted = false; break;
+                case "down": level = Math.Max(0f, level - amount / 100f); break;
+                case "set": level = Math.Max(0f, Math.Min(1f, amount / 100f)); muted = false; break;
+                case "mute": muted = !muted; break;
+                default: throw new Exception("Bilinmeyen islem: " + op);
+            }
+            Guid g = Guid.Empty;
+            foreach (var s in matches)
+            {
+                if (op != "mute") Check(s.Volume.SetMasterVolume(level, ref g));
+                Check(s.Volume.SetMute(muted, ref g));
+            }
+            return new Dictionary<string, object> { { "ok", true }, { "level", (int)Math.Round(level * 100) }, { "muted", muted } };
+        }
+
+        /// Ana ses seviyesi bilgisi (tablet butonda gosterir).
+        public static Dictionary<string, object> MasterStatus()
+        {
+            return new Dictionary<string, object> { { "ok", true }, { "level", (int)Math.Round(Level() * 100) }, { "muted", Muted() } };
+        }
+
+        public static bool Muted()
+        {
+            bool m;
+            Check(Endpoint().GetMute(out m));
+            return m;
+        }
+    }
+
+    // ---------- Yonetici yetkisi ----------
+
+    static class Elevation
+    {
+        [DllImport("user32.dll")]
+        static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        static extern uint GetWindowThreadProcessId(IntPtr h, out int pid);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr h);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool GetTokenInformation(IntPtr token, int cls, out int value, int len, out int ret);
+
+        const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000, TOKEN_QUERY = 0x8;
+        const int TokenElevation = 20;
+
+        public static bool IsSelfElevated()
+        {
+            using (var id = System.Security.Principal.WindowsIdentity.GetCurrent())
+                return new System.Security.Principal.WindowsPrincipal(id)
+                    .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+
+        /// Agent normal yetkideyken on plandaki pencere yonetici olarak calisiyorsa o programin adini dondurur.
+        public static string BlockingForeground()
+        {
+            if (IsSelfElevated()) return null;
+            int pid;
+            GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+            if (pid == 0) return null;
+            bool elevated;
+            IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (h == IntPtr.Zero) elevated = true; // korunan surec (anti-hile vb.)
+            else
+            {
+                IntPtr token;
+                if (!OpenProcessToken(h, TOKEN_QUERY, out token)) elevated = true;
+                else
+                {
+                    int value, ret;
+                    elevated = GetTokenInformation(token, TokenElevation, out value, 4, out ret) && value != 0;
+                    CloseHandle(token);
+                }
+                CloseHandle(h);
+            }
+            if (!elevated) return null;
+            try { return Process.GetProcessById(pid).ProcessName + ".exe"; }
+            catch { return "On plandaki program"; }
+        }
+
+        /// Kendini yonetici olarak yeniden baslatir. UAC reddedilirse false.
+        public static bool Relaunch()
+        {
+            var psi = new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, "--admin")
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
+            };
+            try { Process.Start(psi); return true; }
+            catch (System.ComponentModel.Win32Exception) { return false; }
         }
     }
 

@@ -9,6 +9,9 @@ import java.net.URLEncoder
 
 data class PcApp(val id: String, val name: String)
 
+/** Ses karıştırıcısındaki bir uygulama: name = süreç adı (aksiyonda kullanılır), title = görünen ad. */
+data class AudioApp(val name: String, val title: String, val level: Int, val muted: Boolean)
+
 /** PC'deki TabDeck Agent ile HTTP üzerinden konuşur. */
 class AgentClient(private val settings: () -> Settings) {
 
@@ -20,12 +23,28 @@ class AgentClient(private val settings: () -> Settings) {
         }
     }
 
-    suspend fun run(action: DeckAction): Result<Unit> = withContext(Dispatchers.IO) {
+    /** Aksiyonu çalıştırır; yanıt ses komutlarında yeni seviyeyi ("level", "muted") içerir. */
+    suspend fun run(action: DeckAction): Result<JSONObject> = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings()
             val a = action.copy(value = fill(action.value, s), arg = fill(action.arg, s))
             val r = request(s, "POST", "/action", a.toJson())
             if (!r.optBoolean("ok")) error(r.optString("error", "Hata"))
+            r
+        }
+    }
+
+    /** Windows ses karıştırıcısındaki uygulamalar. */
+    suspend fun audioApps(): Result<List<AudioApp>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val r = request(settings(), "GET", "/audio/apps", null)
+            if (!r.optBoolean("ok")) error(r.optString("error", "Hata"))
+            val arr = r.optJSONArray("apps")
+            if (arr == null) emptyList()
+            else (0 until arr.length()).map {
+                val o = arr.getJSONObject(it)
+                AudioApp(o.getString("name"), o.optString("title", o.getString("name")), o.optInt("level"), o.optBoolean("muted"))
+            }
         }
     }
 

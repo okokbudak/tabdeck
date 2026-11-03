@@ -66,6 +66,7 @@ private val ActionTypes = listOf(
     "text" to "Metin yaz",
     "launch" to "Aç (uygulama/URL)",
     "media" to "Medya / Ses",
+    "appvolume" to "Uygulama sesi",
     "obs" to "OBS",
     "page" to "Sayfaya git",
 )
@@ -153,6 +154,7 @@ fun ButtonEditorDialog(
     var b by remember { mutableStateOf(initial ?: DeckButton()) }
     var obsLists by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
     var obsError by remember { mutableStateOf("") }
+    var audioApps by remember { mutableStateOf<List<AudioApp>>(emptyList()) }
     var showPicker by remember { mutableStateOf(false) }
     var showPcApps by remember { mutableStateOf(false) }
     var openPack by remember { mutableStateOf<String?>(null) }
@@ -289,7 +291,11 @@ fun ButtonEditorDialog(
                         ActionTypes.forEach { (type, name) ->
                             FilterChip(
                                 selected = b.action.type == type,
-                                onClick = { if (b.action.type != type) setAction(DeckAction(type)) },
+                                onClick = {
+                                    if (b.action.type != type) {
+                                        setAction(if (type == "appvolume") DeckAction(type, "", "up", "5") else DeckAction(type))
+                                    }
+                                },
                                 label = { Text(name) },
                             )
                         }
@@ -350,6 +356,62 @@ fun ButtonEditorDialog(
                                     selected = b.action.value == value,
                                     onClick = { setAction(b.action.copy(value = value)); suggest(info.first, info.second) },
                                     label = { Text("${info.second} ${info.first}") },
+                                )
+                            }
+                        }
+
+                        "appvolume" -> {
+                            OutlinedTextField(
+                                value = b.action.value,
+                                onValueChange = { setAction(b.action.copy(value = it)) },
+                                label = { Text("Uygulama (süreç adı)") },
+                                placeholder = { Text("Spotify, Discord, chrome...") },
+                                supportingText = { Text("Windows ses karıştırıcısındaki uygulama. Aşağıdan seçebilirsiniz.") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            ChipRow {
+                                OutlinedButton(onClick = {
+                                    scope.launch {
+                                        vm.client.audioApps()
+                                            .onSuccess { audioApps = it; obsError = if (it.isEmpty()) "Şu an ses çıkaran uygulama yok" else "" }
+                                            .onFailure { obsError = it.message ?: "Hata" }
+                                    }
+                                }) { Text("Ses çıkaran uygulamaları getir") }
+                                audioApps.forEach { app ->
+                                    FilterChip(
+                                        selected = b.action.value.equals(app.name, ignoreCase = true),
+                                        onClick = {
+                                            setAction(b.action.copy(value = app.name))
+                                            suggest(app.title, "🔊")
+                                        },
+                                        label = { Text("${app.title}  %${app.level}${if (app.muted) " 🔇" else ""}") },
+                                    )
+                                }
+                            }
+                            if (obsError.isNotEmpty()) Text(obsError, color = Color(0xFFEF9A9A), fontSize = 13.sp)
+                            Spacer(Modifier.height(8.dp))
+                            ChipRow {
+                                listOf("up" to "🔊 Ses +", "down" to "🔉 Ses −", "mute" to "🔇 Sessiz aç/kapat", "set" to "🎚️ Seviyeye ayarla")
+                                    .forEach { (op, name) ->
+                                        FilterChip(
+                                            selected = b.action.arg == op,
+                                            onClick = {
+                                                setAction(b.action.copy(arg = op, arg2 = if (op == "set") "50" else if (op == "mute") "" else "5"))
+                                            },
+                                            label = { Text(name) },
+                                        )
+                                    }
+                            }
+                            if (b.action.arg != "mute") {
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = b.action.arg2,
+                                    onValueChange = { setAction(b.action.copy(arg2 = it.filter(Char::isDigit).take(3))) },
+                                    label = { Text(if (b.action.arg == "set") "Seviye (%)" else "Adım (%)") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.width(200.dp),
                                 )
                             }
                         }

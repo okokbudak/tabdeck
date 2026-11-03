@@ -59,6 +59,8 @@ Section "TabDeck Agent" SecMain
 
   CreateDirectory "$SMPROGRAMS\TabDeck"
   CreateShortcut "$SMPROGRAMS\TabDeck\TabDeck Agent.lnk" "$INSTDIR\TabDeckAgent.exe"
+  ; Yonetici olarak calisan oyunlarda kisayol/Discord tuslari icin
+  CreateShortcut "$SMPROGRAMS\TabDeck\TabDeck Agent (yönetici).lnk" "$INSTDIR\TabDeckAgent.exe" "--admin" "$INSTDIR\TabDeckAgent.exe" 0
   CreateShortcut "$SMPROGRAMS\TabDeck\TabDeck Agent'ı kaldır.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP}"
@@ -75,6 +77,11 @@ Section "Windows açılışında başlat (simge durumunda)" SecAutostart
   CreateShortcut "$SMSTARTUP\TabDeck Agent.lnk" "$INSTDIR\TabDeckAgent.exe" "" "$INSTDIR\TabDeckAgent.exe" 0 SW_SHOWMINIMIZED
 SectionEnd
 
+; Secilirse acilis kisayolu yonetici modunda baslatir (her acilista UAC sorabilir)
+Section /o "Açılışta yönetici olarak başlat (yönetici olarak çalışan oyunlar için)" SecAutostartAdmin
+  CreateShortcut "$SMSTARTUP\TabDeck Agent.lnk" "$INSTDIR\TabDeckAgent.exe" "--admin" "$INSTDIR\TabDeckAgent.exe" 0 SW_SHOWMINIMIZED
+SectionEnd
+
 Section "Uninstall"
   nsExec::Exec 'taskkill /IM TabDeckAgent.exe /F'
   Sleep 500
@@ -87,6 +94,7 @@ Section "Uninstall"
   RMDir "$INSTDIR"
 
   Delete "$SMPROGRAMS\TabDeck\TabDeck Agent.lnk"
+  Delete "$SMPROGRAMS\TabDeck\TabDeck Agent (yönetici).lnk"
   Delete "$SMPROGRAMS\TabDeck\TabDeck Agent'ı kaldır.lnk"
   RMDir "$SMPROGRAMS\TabDeck"
   Delete "$SMSTARTUP\TabDeck Agent.lnk"

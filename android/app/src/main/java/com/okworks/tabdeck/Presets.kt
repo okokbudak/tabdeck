@@ -16,6 +16,9 @@ private const val YOUTUBE = 0xFFFF0000
 private const val DISCORD = 0xFF5865F2
 private const val OBS = 0xFF302E31
 private const val OBS_RED = 0xFFC62828
+private const val SPOTIFY = 0xFF1DB954
+private const val SPOTIFY_DARK = 0xFF191414
+private const val MASTER = 0xFF37474F
 
 private fun btn(label: String, icon: String, color: Long, type: String, value: String, arg: String = "", arg2: String = "") =
     DeckButton(label = label, icon = icon, color = color, action = DeckAction(type, value, arg, arg2))
@@ -47,6 +50,27 @@ fun presetPacks(): List<PresetPack> = listOf(
             btn("Kaydı böl", "✂️", OBS, "obs", "split"),
             btn("Yayını başlat", "▶️", OBS_RED, "obs", "streamStart"),
             btn("Yayını bitir", "⏹️", OBS_RED, "obs", "streamStop"),
+        ),
+    ),
+    PresetPack(
+        id = "audio", name = "Ses", icon = "si:spotify", color = SPOTIFY,
+        note = "Uygulama sesleri Windows ses karıştırıcısındaki gibi ayrı ayrı değişir; uygulama açık ve en az bir kez ses çalmış olmalı. Butona basınca yeni seviye butonun üstünde görünür.",
+        buttons = listOf(
+            btn("Ana ses −", "🔉", MASTER, "media", "voldown"),
+            btn("Ana ses +", "🔊", MASTER, "media", "volup"),
+            btn("Sessiz", "🔇", MASTER, "media", "mute"),
+            btn("Önceki", "⏮️", SPOTIFY_DARK, "media", "prev"),
+            btn("Oynat/Duraklat", "⏯️", SPOTIFY_DARK, "media", "playpause"),
+            btn("Sonraki", "⏭️", SPOTIFY_DARK, "media", "next"),
+            btn("Spotify −", "si:spotify", SPOTIFY, "appvolume", "Spotify", "down", "5"),
+            btn("Spotify +", "si:spotify", SPOTIFY, "appvolume", "Spotify", "up", "5"),
+            btn("Spotify sessiz", "si:spotify", SPOTIFY, "appvolume", "Spotify", "mute"),
+            btn("Discord −", "si:discord", DISCORD, "appvolume", "Discord", "down", "5"),
+            btn("Discord +", "si:discord", DISCORD, "appvolume", "Discord", "up", "5"),
+            btn("Discord sessiz", "si:discord", DISCORD, "appvolume", "Discord", "mute"),
+            btn("Chrome −", "si:googlechrome", 0xFF1A73E8, "appvolume", "chrome", "down", "5"),
+            btn("Chrome +", "si:googlechrome", 0xFF1A73E8, "appvolume", "chrome", "up", "5"),
+            btn("Spotify %30", "si:spotify", SPOTIFY_DARK, "appvolume", "Spotify", "set", "30"),
         ),
     ),
     PresetPack(

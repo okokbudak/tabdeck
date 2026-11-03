@@ -11,7 +11,8 @@ Android tabletinizi Wi-Fi üzerinden Windows PC'nizi kontrol eden bir Stream Dec
 - Sayfalar, ayarlanabilir ızgara (2–8 sütun × 1–6 satır), tabletten düzenleme (ekle, taşı, sil)
 - **Aksiyonlar:** kısayol tuşları, metin yazma (+Enter ile sohbet makrosu), uygulama/dosya/URL açma, medya ve ses, OBS, sayfa değiştirme
 - **OBS (WebSocket v5):** sahne/önizleme, yayın ve kayıt (aç/kapat/başlat/bitir/duraklat), bölüm işareti, kaydı bölme, replay buffer, sanal kamera, stüdyo modu ve geçiş, ses kaynağı susturma ve seviye, kaynak göster/gizle, filtre aç/kapat, medya kaynağı, ekran görüntüsü. Sahne ve kaynak adları OBS'den çekilebilir.
-- **Hazır paketler:** OBS, Discord, Twitch, Kick, YouTube – tek dokunuşla sayfa olarak eklenir
+- **Uygulama bazlı ses:** Windows ses karıştırıcısındaki her uygulamanın (Spotify, Discord, tarayıcı, oyun…) sesini ayrı ayrı açma/kısma, susturma ya da belirli seviyeye ayarlama. Yeni seviye butonun üstünde görünür.
+- **Hazır paketler:** Ses, OBS, Discord, Twitch, Kick, YouTube – tek dokunuşla sayfa olarak eklenir
 - **İkonlar:** PC'deki uygulamaların gerçek ikonları (Başlat menüsündeki masaüstü ve Store uygulamaları) ve 340 marka logosu
 
 ## Kurulum
@@ -28,8 +29,19 @@ Android tabletinizi Wi-Fi üzerinden Windows PC'nizi kontrol eden bir Stream Dec
 Ayarlar kurulum klasöründeki `agent.json` dosyasındadır:
 
 ```json
-{"port":8765,"token":"123456","obsUrl":"ws://127.0.0.1:4455","obsPassword":"","screenshotDir":""}
+{"port":8765,"token":"12345678","obsUrl":"ws://127.0.0.1:4455","obsPassword":"","screenshotDir":"","runAsAdmin":false}
 ```
+
+Aynı IP'den 60 saniyede 5 hatalı token denemesi yapılırsa o IP 60 saniye engellenir.
+
+### Oyunlar ve yönetici modu
+
+Birçok oyun ve anti-hile sistemi **yönetici olarak** çalışır. Windows, normal yetkili bir programın yönetici olarak çalışan bir pencereye tuş göndermesini sessizce engeller (UIPI). Bu durumda:
+
+- **Medya ve ses** (oynat/duraklat, sonraki, ses ±, sessiz), **OBS**, **uygulama/URL açma** etkilenmez: bunlar tuş göndermeden çalışır.
+- **Kısayol** ve **metin yaz** aksiyonları (Discord tuşları dahil) engellenir. Tablet bunu kırmızı bir hata ve oyunun adıyla bildirir.
+
+Çözüm: agent'ı **yönetici olarak** başlatın: Başlat → **TabDeck Agent (yönetici)**, ya da `agent.json` içinde `"runAsAdmin": true`. Kurulumda "Açılışta yönetici olarak başlat" seçeneği de vardır; UAC ayarınıza göre her açılışta onay isteyebilir. Yönetici modunda tabletten gelen tuşlar yönetici yetkisiyle gönderildiği için token'ı kimseyle paylaşmayın.
 
 **OBS için:** OBS → Araçlar → WebSocket Sunucu Ayarları → "WebSocket sunucusunu etkinleştir". Şifre koyduysanız `obsPassword` alanına yazıp agent'ı yeniden başlatın.
 
@@ -62,7 +74,6 @@ Discord'un yerel bir kontrol arayüzü olmadığı için Discord paketi F13–F1
 
 > İpucu: Kısayol çakışmasın diye `ctrl+alt+f13`…`f24` gibi kullanılmayan tuşları programlarda atayıp TabDeck'ten tetikleyebilirsiniz.
 
-Agent normal yetkiyle çalıştığı için yönetici olarak açılmış pencerelere (ör. Görev Yöneticisi) tuş gönderemez; bu bir Windows kısıtlamasıdır.
 
 ## Agent API
 
@@ -71,7 +82,8 @@ Tüm isteklerde `X-Token: <token>` başlığı gerekir.
 | İstek | Yanıt |
 |---|---|
 | `GET /ping` | `{"ok":true,"name":"PC-ADI"}` |
-| `POST /action` | gövde `{"type":"hotkey\|text\|launch\|media\|obs","value":"…","arg":"…","arg2":"…"}` |
+| `POST /action` | gövde `{"type":"hotkey\|text\|launch\|media\|appvolume\|obs","value":"…","arg":"…","arg2":"…"}` |
+| `GET /audio/apps` | `{"ok":true,"apps":[{"name":"Spotify","title":"Spotify","level":80,"muted":false}]}` |
 | `GET /obs/scenes`, `GET /obs/inputs` | `{"ok":true,"scenes":[…]}` / `{"ok":true,"inputs":[…]}` |
 | `GET /apps` | `{"ok":true,"apps":[{"id":"…","name":"…"}]}` |
 | `GET /appicon?id=<id>&size=<16-256>` | PNG |
