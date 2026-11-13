@@ -34,6 +34,9 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     var pcName by mutableStateOf("")
         private set
 
+    /** OBS sahne döngüsünün son bilinen durumu (sayfada döngü butonu varken güncellenir). */
+    var cycle by mutableStateOf<CycleStatus?>(null)
+
     val client = AgentClient { settings }
 
     val slotCount get() = settings.cols * settings.rows
@@ -50,6 +53,14 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
                     pcName = r.getOrDefault("")
                 }
                 delay(if (connected == true) 5000L else 3000L)
+            }
+        }
+        // Döngü butonlarındaki geri sayımı güncel tut
+        viewModelScope.launch {
+            while (true) {
+                val hasCycle = currentPage.slots.any { it?.action?.type == "obs" && it.action.value == "cycle" }
+                if (hasCycle && connected == true) client.cycleStatus().onSuccess { cycle = it }
+                delay(1000L)
             }
         }
     }

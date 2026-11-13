@@ -9,6 +9,16 @@ import java.net.URLEncoder
 
 data class PcApp(val id: String, val name: String)
 
+/** OBS sahne döngüsünün durumu. key = döngüdeki sahneler (satır satır), butonun arg'ıyla eşleşir. */
+data class CycleStatus(val running: Boolean, val key: String, val remaining: Int, val scene: String) {
+    companion object {
+        fun from(o: JSONObject) = CycleStatus(o.optBoolean("cycle"), o.optString("key"), o.optInt("remaining"), o.optString("scene"))
+
+        /** Butondaki sahne listesini ajanın anahtarıyla aynı biçime getirir. */
+        fun keyOf(sceneText: String) = sceneText.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+    }
+}
+
 /** Ses karıştırıcısındaki bir uygulama: name = süreç adı (aksiyonda kullanılır), title = görünen ad. */
 data class AudioApp(val name: String, val title: String, val level: Int, val muted: Boolean)
 
@@ -82,6 +92,14 @@ class AgentClient(private val settings: () -> Settings) {
             val (code, bytes) = requestRaw(settings(), "GET", "/appicon?id=$q&size=$size", null)
             if (code != 200) error("İkon alınamadı (HTTP $code)")
             bytes
+        }
+    }
+
+    suspend fun cycleStatus(): Result<CycleStatus> = withContext(Dispatchers.IO) {
+        runCatching {
+            val r = request(settings(), "GET", "/obs/cycle", null)
+            if (!r.optBoolean("ok")) error(r.optString("error", "Hata"))
+            CycleStatus.from(r)
         }
     }
 

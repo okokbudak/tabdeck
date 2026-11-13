@@ -1,5 +1,6 @@
 // TabDeck PC Agent - tabletteki TabDeck uygulamasindan gelen komutlari calistirir.
 // Windows'ta hazir bulunan .NET Framework csc.exe ile derlenir (build.bat). C# 5 uyumlu.
+// Arayuz (tepsi simgesi, pencere) AgentUI.cs dosyasinda.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -36,13 +37,109 @@ namespace TabDeck
 
     static class Program
     {
-        static Config cfg;
+        internal static Config cfg;
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
-        static readonly ObsClient Obs = new ObsClient();
+        internal static readonly ObsClient Obs = new ObsClient();
 
+        internal static string ConfigPath
+        {
+            get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "agent.json"); }
+        }
+
+        [STAThread]
         static void Main(string[] args)
         {
-            Console.OutputEncoding = Encoding.UTF8;
+            if (args.Length > 0 && (args[0].StartsWith("--test") || args[0] == "--appvolume" || args[0] == "--make-icon"))
+            {
+                // Gelistirme komutlari: cagiran konsola yazar
+                AttachConsole(-1);
+                try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+                RunCli(args);
+                return;
+            }
+
+            cfg = LoadConfig();
+            Obs.Url = cfg.obsUrl;
+            Obs.Password = cfg.obsPassword;
+
+            bool tray = Array.IndexOf(args, "--tray") >= 0;
+            bool wantAdmin = cfg.runAsAdmin || Array.IndexOf(args, "--admin") >= 0;
+            if (wantAdmin && !Elevation.IsSelfElevated())
+            {
+                if (Elevation.Relaunch(tray ? "--admin --tray" : "--admin")) return;
+                Log.Write("Yonetici izni verilmedi; normal yetkiyle devam ediliyor.");
+            }
+            AgentApp.Run(tray);
+        }
+
+        [DllImport("kernel32.dll")]
+        static extern bool AttachConsole(int pid);
+
+        // ---------- Sunucu ----------
+
+        static TcpListener listener;
+        internal static string ServerError;
+
+        internal static bool Running { get { return listener != null; } }
+
+        internal static void StartServer()
+        {
+            StopServer();
+            try
+            {
+                var l = new TcpListener(IPAddress.Any, cfg.port);
+                l.Start();
+                listener = l;
+                ServerError = null;
+                new Thread(() => AcceptLoop(l)) { IsBackground = true }.Start();
+                Log.Write("Dinleniyor: port " + cfg.port);
+            }
+            catch (Exception e)
+            {
+                ServerError = "Port " + cfg.port + " açılamadı: " + e.Message;
+                Log.Write(ServerError);
+            }
+        }
+
+        static void AcceptLoop(TcpListener l)
+        {
+            while (true)
+            {
+                TcpClient client;
+                try { client = l.AcceptTcpClient(); }
+                catch { return; } // StopServer
+                ThreadPool.QueueUserWorkItem(delegate { HandleClient(client); });
+            }
+        }
+
+        internal static void StopServer()
+        {
+            if (listener == null) return;
+            try { listener.Stop(); } catch { }
+            listener = null;
+        }
+
+        internal static void SaveConfig()
+        {
+            File.WriteAllText(ConfigPath, Json.Serialize(cfg));
+            Obs.Url = cfg.obsUrl;
+            Obs.Password = cfg.obsPassword;
+            Obs.Reset();
+        }
+
+        internal static string NewToken()
+        {
+            return new Random().Next(10000000, 99999999).ToString();
+        }
+
+        static void RunCli(string[] args)
+        {
+            if (args.Length == 2 && args[0] == "--make-icon")
+            {
+                AppIcon.WriteIco(args[1]);
+                Console.WriteLine("ikon yazildi: " + args[1]);
+                return;
+            }
             if (args.Length == 2 && args[0] == "--test-apps")
             {
                 ShellApps.Test(args[1]);
@@ -76,73 +173,58 @@ namespace TabDeck
                 }
                 return;
             }
+            if (args.Length == 1 && args[0] == "--test-cycle")
+            {
+                TestCycle();
+                return;
+            }
             if (args.Length == 1 && args[0] == "--test-foreground")
             {
                 Console.WriteLine("engelleyen on plan: " + (Elevation.BlockingForeground() ?? "(yok)"));
                 return;
             }
-            cfg = LoadConfig();
-            Obs.Url = cfg.obsUrl;
-            Obs.Password = cfg.obsPassword;
-
-            bool wantAdmin = cfg.runAsAdmin || Array.IndexOf(args, "--admin") >= 0;
-            bool admin = Elevation.IsSelfElevated();
-            if (wantAdmin && !admin)
-            {
-                if (Elevation.Relaunch()) return;
-                Console.WriteLine("Yonetici izni verilmedi; normal yetkiyle devam ediliyor.");
-            }
-            Console.Title = admin ? "TabDeck Agent (yonetici)" : "TabDeck Agent";
-
-            var listener = new TcpListener(IPAddress.Any, cfg.port);
-            try { listener.Start(); }
-            catch (Exception e)
-            {
-                Console.WriteLine("Port " + cfg.port + " acilamadi: " + e.Message);
-                Console.ReadLine();
-                return;
-            }
-
-            Console.WriteLine("==============================================");
-            Console.WriteLine(" TabDeck Agent calisiyor");
-            Console.WriteLine(" Port : " + cfg.port);
-            Console.WriteLine(" Token: " + cfg.token);
-            foreach (var ip in LocalIps()) Console.WriteLine(" IP   : " + ip);
-            Console.WriteLine(" Yetki: " + (admin ? "yonetici (yonetici olarak calisan oyunlarda da tus gonderir)"
-                : "normal (yonetici olarak calisan oyunlarda kisayollar engellenir)"));
-            Console.WriteLine(" Tablette bu IP, port ve token'i girin.");
-            Console.WriteLine("==============================================");
-
-            while (true)
-            {
-                var client = listener.AcceptTcpClient();
-                ThreadPool.QueueUserWorkItem(delegate { HandleClient(client); });
-            }
+            Console.WriteLine("Bilinmeyen komut: " + string.Join(" ", args));
         }
 
         static Config LoadConfig()
         {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "agent.json");
+            string path = ConfigPath;
             Config c = null;
             if (File.Exists(path))
             {
                 try { c = Json.Deserialize<Config>(File.ReadAllText(path)); }
-                catch (Exception e) { Console.WriteLine("agent.json okunamadi: " + e.Message); }
+                catch (Exception e) { Log.Write("agent.json okunamadı: " + e.Message); }
             }
             if (c == null) c = new Config();
             if (string.IsNullOrEmpty(c.token))
             {
-                c.token = new Random().Next(10000000, 99999999).ToString();
+                c.token = NewToken();
                 File.WriteAllText(path, Json.Serialize(c));
             }
             return c;
         }
 
-        static IEnumerable<string> LocalIps()
+        /// Yerel IPv4 adresleri; varsayilan agi (gateway'i olan) ilk sirada, sanal adaptorler sonda.
+        internal static List<string> LocalIps()
         {
-            foreach (var a in Dns.GetHostEntry(Dns.GetHostName()).AddressList)
-                if (a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a))
-                    yield return a.ToString();
+            var primary = new List<string>();
+            var other = new List<string>();
+            foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                var props = ni.GetIPProperties();
+                bool hasGateway = false;
+                foreach (var g in props.GatewayAddresses)
+                    if (g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any)) hasGateway = true;
+                foreach (var a in props.UnicastAddresses)
+                {
+                    if (a.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    (hasGateway ? primary : other).Add(a.Address.ToString());
+                }
+            }
+            primary.AddRange(other);
+            return primary;
         }
 
         /// Gelistirme testi: ses seviyesini Core Audio ve WM_APPCOMMAND ile bir adim artirip geri alir.
@@ -162,6 +244,43 @@ namespace TabDeck
             CoreAudio.ToggleMute(); Thread.Sleep(200);
             Console.WriteLine("sessiz    : " + m1 + " -> " + CoreAudio.Muted());
             Console.WriteLine("yonetici  : " + Elevation.IsSelfElevated());
+        }
+
+        /// Gelistirme testi: OBS'in ilk iki sahnesi arasinda 6 sn'lik donguyu calistirip durdurur ve
+        /// baslangictaki sahneye geri doner. Yayin ya da kayit aciksa hicbir sey yapmaz.
+        static void TestCycle()
+        {
+            cfg = LoadConfig();
+            Obs.Url = cfg.obsUrl;
+            Obs.Password = cfg.obsPassword;
+            if ((bool)Obs.Request("GetStreamStatus", null)["outputActive"] || (bool)Obs.Request("GetRecordStatus", null)["outputActive"])
+            {
+                Console.WriteLine("OBS'te yayin ya da kayit acik; test yapilmadi.");
+                return;
+            }
+            var scenes = (List<string>)((Dictionary<string, object>)ObsScenes())["scenes"];
+            if (scenes.Count < 2) { Console.WriteLine("En az iki sahne gerekli; OBS'te " + scenes.Count + " sahne var."); return; }
+            string original = CurrentScene();
+            string list = scenes[0] + "\n" + scenes[1];
+            Console.WriteLine("baslangic sahnesi: " + original + "   dongu: " + scenes[0] + " <-> " + scenes[1] + " (6 sn)");
+            try
+            {
+                var s = (Dictionary<string, object>)SceneCycle.Toggle(list, "0.1");
+                Console.WriteLine("baslat -> cycle=" + s["cycle"] + " kalan=" + s["remaining"] + " sn");
+                for (int i = 0; i < 7; i++)
+                {
+                    Thread.Sleep(2000);
+                    var st = SceneCycle.Status();
+                    Console.WriteLine(string.Format("{0,2} sn: sahne={1,-20} dongu={2} kalan={3}", (i + 1) * 2, CurrentScene(), st["scene"], st["remaining"]));
+                }
+                s = (Dictionary<string, object>)SceneCycle.Toggle(list, "0.1");
+                Console.WriteLine("durdur -> cycle=" + s["cycle"]);
+            }
+            finally
+            {
+                Obs.Request("SetCurrentProgramScene", D("sceneName", original));
+                Console.WriteLine("geri donuldu: " + CurrentScene());
+            }
         }
 
         // ---------- Minimal HTTP ----------
@@ -195,7 +314,9 @@ namespace TabDeck
                     object result;
                     int status = 200;
                     string ip = ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString();
-                    if (TokenGuard.IsBlocked(ip))
+                    bool blocked = TokenGuard.IsBlocked(ip);
+                    if (!blocked && tok == cfg.token) Log.Seen(ip);
+                    if (blocked)
                     {
                         status = 429;
                         result = Err("Cok fazla hatali token denemesi; 60 sn sonra tekrar deneyin");
@@ -226,8 +347,21 @@ namespace TabDeck
                         result = ObsScenes();
                     else if (method == "GET" && path == "/obs/inputs")
                         result = ObsInputs();
+                    else if (method == "GET" && path == "/obs/cycle")
+                        result = SceneCycle.Status();
                     else if (method == "POST" && path == "/action")
-                        result = RunAction(Json.Deserialize<Dictionary<string, object>>(body));
+                    {
+                        var a = Json.Deserialize<Dictionary<string, object>>(body);
+                        string what = Str(a, "type") + " " + Str(a, "value") + (Str(a, "arg") != "" ? " " + Str(a, "arg") : "");
+                        try { result = RunAction(a); }
+                        catch (Exception e)
+                        {
+                            Log.Action(ip, what, e.Message);
+                            throw;
+                        }
+                        var rd = result as Dictionary<string, object>;
+                        Log.Action(ip, what, rd != null && rd.ContainsKey("error") ? (string)rd["error"] : null);
+                    }
                     else
                     {
                         status = 404;
@@ -297,8 +431,8 @@ namespace TabDeck
             s.Write(bytes, 0, bytes.Length);
         }
 
-        static Dictionary<string, object> Ok() { return new Dictionary<string, object> { { "ok", true } }; }
-        static Dictionary<string, object> Err(string m) { return new Dictionary<string, object> { { "ok", false }, { "error", m } }; }
+        internal static Dictionary<string, object> Ok() { return new Dictionary<string, object> { { "ok", true } }; }
+        internal static Dictionary<string, object> Err(string m) { return new Dictionary<string, object> { { "ok", false }, { "error", m } }; }
 
         static string Str(Dictionary<string, object> d, string k)
         {
@@ -315,13 +449,12 @@ namespace TabDeck
             string blocker = Elevation.BlockingForeground();
             if (blocker == null) return Ok();
             return Err(blocker + " yonetici olarak calisiyor; Windows bu yuzden tuslari engelliyor. "
-                + "TabDeck Agent'i yonetici olarak baslatin (Baslat > TabDeck Agent (yonetici)).");
+                + "TabDeck Agent penceresinde \"Yönetici olarak yeniden başlat\"a basın.");
         }
 
         static object RunAction(Dictionary<string, object> a)
         {
             string type = Str(a, "type");
-            Console.WriteLine(DateTime.Now.ToString("HH:mm:ss") + "  " + type + "  " + Str(a, "value"));
             switch (type)
             {
                 case "hotkey":
@@ -369,14 +502,14 @@ namespace TabDeck
             }
         }
 
-        static Dictionary<string, object> D(params object[] kv)
+        internal static Dictionary<string, object> D(params object[] kv)
         {
             var d = new Dictionary<string, object>();
             for (int i = 0; i + 1 < kv.Length; i += 2) d[(string)kv[i]] = kv[i + 1];
             return d;
         }
 
-        static string CurrentScene()
+        internal static string CurrentScene()
         {
             return Str(Obs.Request("GetCurrentProgramScene", null), "currentProgramSceneName");
         }
@@ -385,6 +518,7 @@ namespace TabDeck
         {
             switch (cmd)
             {
+                case "cycle": return SceneCycle.Toggle(arg, arg2);
                 case "scene": Obs.Request("SetCurrentProgramScene", D("sceneName", arg)); break;
                 case "preview": Obs.Request("SetCurrentPreviewScene", D("sceneName", arg)); break;
                 case "stream": Obs.Request("ToggleStream", null); break;
@@ -593,6 +727,115 @@ namespace TabDeck
         }
     }
 
+    // ---------- OBS sahne dongusu ----------
+
+    /// Secilen sahneler arasinda belirli surede bir sirayla gecer. Ayni sahne listesiyle tekrar
+    /// cagrilinca durur; farkli listeyle cagrilinca calisan dongunun yerini alir (tek dongu).
+    static class SceneCycle
+    {
+        static readonly object gate = new object();
+        static Timer timer;
+        static string key = "";
+        static List<string> scenes;
+        static int index;
+        static TimeSpan interval;
+        static DateTime nextAt;
+
+        /// Tabletteki sahne listesi: her satira bir sahne. Anahtar, bosluklari kirpilmis satirlarin birlesimi.
+        static List<string> Parse(string text)
+        {
+            var list = new List<string>();
+            foreach (var line in text.Replace("\r", "").Split('\n'))
+                if (line.Trim() != "") list.Add(line.Trim());
+            return list;
+        }
+
+        public static object Toggle(string sceneText, string minutesText)
+        {
+            var list = Parse(sceneText);
+            if (list.Count < 2) return Program.Err("Döngü için en az iki sahne seçin");
+            double minutes;
+            if (!double.TryParse(minutesText.Replace(',', '.'), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out minutes) || minutes < 0.1)
+                return Program.Err("Süre geçersiz (en az 0.1 dakika): " + minutesText);
+            string k = string.Join("\n", list);
+
+            lock (gate)
+            {
+                if (timer != null && key == k)
+                {
+                    StopLocked();
+                    Log.Write("Sahne döngüsü durduruldu");
+                    return StatusLocked();
+                }
+                StopLocked();
+
+                // Su anki sahne listedeyse oradan devam et, degilse ilk sahneye hemen gec
+                string current = "";
+                try { current = Program.CurrentScene(); } catch { }
+                int i = list.IndexOf(current);
+                if (i < 0)
+                {
+                    Program.Obs.Request("SetCurrentProgramScene", Program.D("sceneName", list[0]));
+                    i = 0;
+                }
+                scenes = list;
+                key = k;
+                index = i;
+                interval = TimeSpan.FromMinutes(minutes);
+                nextAt = DateTime.Now + interval;
+                timer = new Timer(Tick, null, interval, interval);
+                Log.Write("Sahne döngüsü başladı: " + string.Join(" → ", list) + " (" + minutes.ToString("0.##") + " dk)");
+                return StatusLocked();
+            }
+        }
+
+        static void Tick(object state)
+        {
+            string scene;
+            lock (gate)
+            {
+                if (timer == null) return;
+                index = (index + 1) % scenes.Count;
+                scene = scenes[index];
+                nextAt = DateTime.Now + interval;
+            }
+            try
+            {
+                Program.Obs.Request("SetCurrentProgramScene", Program.D("sceneName", scene));
+                Log.Write("Döngü → " + scene);
+            }
+            catch (Exception e)
+            {
+                // OBS kapali olabilir: dongu surer, bir sonraki turda yeniden denenir
+                Log.Write("Döngü → " + scene + " geçilemedi: " + e.Message);
+            }
+        }
+
+        static void StopLocked()
+        {
+            if (timer != null) timer.Dispose();
+            timer = null;
+        }
+
+        public static Dictionary<string, object> Status()
+        {
+            lock (gate) return StatusLocked();
+        }
+
+        static Dictionary<string, object> StatusLocked()
+        {
+            bool running = timer != null;
+            int remaining = running ? Math.Max(0, (int)Math.Ceiling((nextAt - DateTime.Now).TotalSeconds)) : 0;
+            return new Dictionary<string, object>
+            {
+                { "ok", true }, { "cycle", running }, { "key", running ? key : "" },
+                { "remaining", remaining }, { "scene", running ? scenes[index] : "" },
+                { "badge", running ? "▶" : "⏸" },
+            };
+        }
+    }
+
     // ---------- Token deneme siniri ----------
 
     /// Ayni IP'den 60 sn icinde 5 hatali token denemesinden sonra 60 sn engeller.
@@ -622,7 +865,7 @@ namespace TabDeck
                 {
                     e.BlockedUntil = now.AddSeconds(60);
                     e.Count = 0;
-                    Console.WriteLine(DateTime.Now.ToString("HH:mm:ss") + "  " + ip + " hatali token nedeniyle 60 sn engellendi");
+                    Log.Write(ip + " hatalı token denemeleri nedeniyle 60 sn engellendi");
                 }
             }
         }
@@ -967,9 +1210,9 @@ namespace TabDeck
         }
 
         /// Kendini yonetici olarak yeniden baslatir. UAC reddedilirse false.
-        public static bool Relaunch()
+        public static bool Relaunch(string args)
         {
-            var psi = new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, "--admin")
+            var psi = new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, args)
             {
                 UseShellExecute = true,
                 Verb = "runas",
@@ -1284,6 +1527,12 @@ namespace TabDeck
         {
             if (ws != null) { try { ws.Abort(); ws.Dispose(); } catch { } }
             ws = null;
+        }
+
+        /// Ayarlar degisince baglantiyi kapatir; sonraki istek yeni adres/sifreyle baglanir.
+        public void Reset()
+        {
+            lock (gate) Close();
         }
     }
 }

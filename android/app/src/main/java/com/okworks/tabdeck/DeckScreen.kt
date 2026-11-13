@@ -85,9 +85,16 @@ fun DeckApp(vm: DeckViewModel) {
         else -> {
             val r = vm.client.run(b.action)
             r.exceptionOrNull()?.let { toast(it.message ?: "Hata") }
-            // Ses komutları yeni seviyeyi döndürür; butonun üstünde kısa süre gösterilir
-            val badge = r.getOrNull()?.takeIf { it.has("level") }?.let {
-                if (it.optBoolean("muted")) "🔇" else "%${it.optInt("level")}"
+            val json = r.getOrNull()
+            // Sahne döngüsü yanıtı yeni durumu içerir; geri sayımı hemen güncelle
+            if (json != null && json.has("cycle")) vm.cycle = CycleStatus.from(json)
+            // Ses komutları yeni seviyeyi, döngü ▶/⏸ döndürür; butonun üstünde kısa süre gösterilir
+            val badge = json?.let {
+                when {
+                    it.has("badge") -> it.optString("badge")
+                    it.has("level") -> if (it.optBoolean("muted")) "🔇" else "%${it.optInt("level")}"
+                    else -> null
+                }
             }
             PressResult(r.isSuccess, badge)
         }
@@ -241,11 +248,13 @@ private fun DeckGrid(
                 Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                     repeat(cols) { c ->
                         val i = r * cols + c
+                        val button = page.slots.getOrNull(i)
                         DeckKey(
-                            button = page.slots.getOrNull(i),
+                            button = button,
                             size = cell,
                             editMode = vm.editMode,
                             selected = moveFrom == i,
+                            status = cycleLabel(button, vm.cycle),
                             onPress = onPress,
                             onEditTap = { onEditTap(i) },
                             onEditLongPress = { onEditLongPress(i) },
@@ -257,6 +266,14 @@ private fun DeckGrid(
     }
 }
 
+/** Bu buton çalışan sahne döngüsünü başlattıysa sonraki geçişe kalan süre ("▶ 4:12"). */
+private fun cycleLabel(button: DeckButton?, cycle: CycleStatus?): String? {
+    if (button == null || cycle == null || !cycle.running) return null
+    if (button.action.type != "obs" || button.action.value != "cycle") return null
+    if (CycleStatus.keyOf(button.action.arg) != cycle.key) return null
+    return "▶ %d:%02d".format(cycle.remaining / 60, cycle.remaining % 60)
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DeckKey(
@@ -264,6 +281,7 @@ fun DeckKey(
     size: Dp,
     editMode: Boolean,
     selected: Boolean = false,
+    status: String? = null,
     onPress: suspend (DeckButton) -> PressResult = { PressResult(true) },
     onEditTap: () -> Unit = {},
     onEditLongPress: () -> Unit = {},
@@ -348,6 +366,20 @@ fun DeckKey(
                         lineHeight = with(density) { (size * 0.13f).toSp() },
                     )
                 }
+            }
+            if (status != null && badge == null) {
+                Text(
+                    status,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = with(density) { (size * 0.11f).toSp() },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = size * 0.05f)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xCC000000))
+                        .padding(horizontal = size * 0.06f, vertical = size * 0.01f),
+                )
             }
             badge?.let {
                 Box(

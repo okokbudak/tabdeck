@@ -96,6 +96,7 @@ private data class ObsCmd(
 private val ObsCommands = listOf(
     ObsCmd("scene", "Sahne değiştir", "🎬", "Sahne adı", argList = "scenes"),
     ObsCmd("preview", "Önizleme sahnesi", "🖼️", "Sahne adı", argList = "scenes"),
+    ObsCmd("cycle", "Sahne döngüsü", "🔁"),
     ObsCmd("stream", "Yayın aç/kapat", "📡"),
     ObsCmd("streamStart", "Yayını başlat", "▶️"),
     ObsCmd("streamStop", "Yayını bitir", "⏹️"),
@@ -422,12 +423,53 @@ fun ButtonEditorDialog(
                                     FilterChip(
                                         selected = b.action.value == cmd.value,
                                         onClick = {
-                                            setAction(DeckAction("obs", cmd.value))
+                                            setAction(if (cmd.value == "cycle") DeckAction("obs", "cycle", "", "5") else DeckAction("obs", cmd.value))
                                             suggest(cmd.label, cmd.icon)
                                         },
                                         label = { Text("${cmd.icon} ${cmd.label}") },
                                     )
                                 }
+                            }
+                            if (b.action.value == "cycle") {
+                                val selected = b.action.arg.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Butona basınca seçilen sahneler arasında sırayla geçilir; tekrar basınca durur.",
+                                    color = Color(0xFF8A8D93), fontSize = 13.sp,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = b.action.arg,
+                                    onValueChange = { setAction(b.action.copy(arg = it)) },
+                                    label = { Text("Sahneler (her satıra bir sahne, sırayla)") },
+                                    minLines = 2,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                // OBS'den gelen sahnelere dokununca listeye eklenir / listeden çıkar
+                                ChipRow {
+                                    OutlinedButton(onClick = { fetchObs("scenes") }) { Text("OBS'den sahneleri getir") }
+                                    obsLists["scenes"]?.forEach { s ->
+                                        FilterChip(
+                                            selected = s in selected,
+                                            onClick = {
+                                                val next = if (s in selected) selected - s else selected + s
+                                                setAction(b.action.copy(arg = next.joinToString("\n")))
+                                            },
+                                            label = { Text(s) },
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = b.action.arg2,
+                                    onValueChange = { setAction(b.action.copy(arg2 = it.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(5))) },
+                                    label = { Text("Süre (dakika)") },
+                                    supportingText = { Text("Örn: 5, 2.5, 0.5") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                    modifier = Modifier.width(200.dp),
+                                )
+                                if (selected.size < 2) Text("En az iki sahne seçin.", color = Color(0xFFEF9A9A), fontSize = 13.sp)
                             }
                             val cmd = ObsCommands.firstOrNull { it.value == b.action.value }
                             if (cmd?.argLabel != null) {

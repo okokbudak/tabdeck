@@ -31,6 +31,8 @@ VIAddVersionKey "LegalCopyright" "GPL-3.0"
 !include "MUI2.nsh"
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "${SRC}\tabdeck.ico"
+!define MUI_UNICON "${SRC}\tabdeck.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\TabDeckAgent.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "TabDeck Agent'ı şimdi başlat"
 
@@ -59,9 +61,11 @@ Section "TabDeck Agent" SecMain
 
   CreateDirectory "$SMPROGRAMS\TabDeck"
   CreateShortcut "$SMPROGRAMS\TabDeck\TabDeck Agent.lnk" "$INSTDIR\TabDeckAgent.exe"
-  ; Yonetici olarak calisan oyunlarda kisayol/Discord tuslari icin
-  CreateShortcut "$SMPROGRAMS\TabDeck\TabDeck Agent (yönetici).lnk" "$INSTDIR\TabDeckAgent.exe" "--admin" "$INSTDIR\TabDeckAgent.exe" 0
   CreateShortcut "$SMPROGRAMS\TabDeck\TabDeck Agent'ı kaldır.lnk" "$INSTDIR\Uninstall.exe"
+  ; 1.0.x'ten kalanlar: yonetici kisayolu (artik pencerede dugme var) ve Baslangic klasoru kisayolu
+  ; (acilista baslatma artik HKCU\...\Run ile, agent ayarlarindan da acilip kapatilabilir)
+  Delete "$SMPROGRAMS\TabDeck\TabDeck Agent (yönetici).lnk"
+  Delete "$SMSTARTUP\TabDeck Agent.lnk"
 
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP}"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
@@ -73,13 +77,9 @@ Section "TabDeck Agent" SecMain
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
 SectionEnd
 
-Section "Windows açılışında başlat (simge durumunda)" SecAutostart
-  CreateShortcut "$SMSTARTUP\TabDeck Agent.lnk" "$INSTDIR\TabDeckAgent.exe" "" "$INSTDIR\TabDeckAgent.exe" 0 SW_SHOWMINIMIZED
-SectionEnd
-
-; Secilirse acilis kisayolu yonetici modunda baslatir (her acilista UAC sorabilir)
-Section /o "Açılışta yönetici olarak başlat (yönetici olarak çalışan oyunlar için)" SecAutostartAdmin
-  CreateShortcut "$SMSTARTUP\TabDeck Agent.lnk" "$INSTDIR\TabDeckAgent.exe" "--admin" "$INSTDIR\TabDeckAgent.exe" 0 SW_SHOWMINIMIZED
+; Agent penceresindeki "Windows acilisinda baslat" secenegiyle ayni kayit
+Section "Windows açılışında başlat (sistem tepsisinde)" SecAutostart
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TabDeck Agent" '"$INSTDIR\TabDeckAgent.exe" --tray'
 SectionEnd
 
 Section "Uninstall"
@@ -98,6 +98,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\TabDeck\TabDeck Agent'ı kaldır.lnk"
   RMDir "$SMPROGRAMS\TabDeck"
   Delete "$SMSTARTUP\TabDeck Agent.lnk"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TabDeck Agent"
 
   DeleteRegKey HKCU "${UNINST_KEY}"
 SectionEnd

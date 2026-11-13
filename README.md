@@ -10,7 +10,7 @@ Android tabletinizi Wi-Fi üzerinden Windows PC'nizi kontrol eden bir Stream Dec
 
 - Sayfalar, ayarlanabilir ızgara (2–8 sütun × 1–6 satır), tabletten düzenleme (ekle, taşı, sil)
 - **Aksiyonlar:** kısayol tuşları, metin yazma (+Enter ile sohbet makrosu), uygulama/dosya/URL açma, medya ve ses, OBS, sayfa değiştirme
-- **OBS (WebSocket v5):** sahne/önizleme, yayın ve kayıt (aç/kapat/başlat/bitir/duraklat), bölüm işareti, kaydı bölme, replay buffer, sanal kamera, stüdyo modu ve geçiş, ses kaynağı susturma ve seviye, kaynak göster/gizle, filtre aç/kapat, medya kaynağı, ekran görüntüsü. Sahne ve kaynak adları OBS'den çekilebilir.
+- **OBS (WebSocket v5):** sahne/önizleme, **sahne döngüsü** (seçilen sahneler arasında belirli sürede bir otomatik geçiş, butonda geri sayım), yayın ve kayıt (aç/kapat/başlat/bitir/duraklat), bölüm işareti, kaydı bölme, replay buffer, sanal kamera, stüdyo modu ve geçiş, ses kaynağı susturma ve seviye, kaynak göster/gizle, filtre aç/kapat, medya kaynağı, ekran görüntüsü. Sahne ve kaynak adları OBS'den çekilebilir.
 - **Uygulama bazlı ses:** Windows ses karıştırıcısındaki her uygulamanın (Spotify, Discord, tarayıcı, oyun…) sesini ayrı ayrı açma/kısma, susturma ya da belirli seviyeye ayarlama. Yeni seviye butonun üstünde görünür.
 - **Hazır paketler:** Ses, OBS, Discord, Twitch, Kick, YouTube – tek dokunuşla sayfa olarak eklenir
 - **İkonlar:** PC'deki uygulamaların gerçek ikonları (Başlat menüsündeki masaüstü ve Store uygulamaları) ve 340 marka logosu
@@ -23,10 +23,16 @@ Android tabletinizi Wi-Fi üzerinden Windows PC'nizi kontrol eden bir Stream Dec
 
 1. Kurulum dosyasını çalıştırın. Yönetici yetkisi istemez; `%LOCALAPPDATA%\Programs\TabDeck` klasörüne kurar. İsterseniz Windows açılışında simge durumunda başlatır.
    - Dosya imzasız olduğu için SmartScreen uyarı verebilir: **Ek bilgi → Yine de çalıştır**.
-2. TabDeck Agent penceresinde **IP**, **port** ve **token** yazar.
+2. TabDeck Agent penceresi tablette girilecek **IP**, **port** ve **token**'ı kopyala düğmeleriyle gösterir.
 3. Windows Güvenlik Duvarı izin isterse **Özel ağlar** için izin verin.
 
-Ayarlar kurulum klasöründeki `agent.json` dosyasındadır:
+Pencereyi kapatınca agent sistem tepsisinde çalışmaya devam eder; tepsi simgesine çift tıklayarak açabilir, sağ tıklayıp **Çıkış** ile kapatabilirsiniz. Pencerede:
+
+- **Ayarlar:** port, OBS adresi ve şifresi (**OBS bağlantısını test et**), ekran görüntüsü klasörü, Windows açılışında başlatma, yönetici modu
+- **Yeni token** oluşturma, **Yönetici olarak yeniden başlat** düğmesi
+- **Etkinlik:** son bağlanan tablet ve gelen komutların sonuçları
+
+Ayarlar kurulum klasöründeki `agent.json` dosyasında saklanır:
 
 ```json
 {"port":8765,"token":"12345678","obsUrl":"ws://127.0.0.1:4455","obsPassword":"","screenshotDir":"","runAsAdmin":false}
@@ -41,7 +47,7 @@ Birçok oyun ve anti-hile sistemi **yönetici olarak** çalışır. Windows, nor
 - **Medya ve ses** (oynat/duraklat, sonraki, ses ±, sessiz), **OBS**, **uygulama/URL açma** etkilenmez: bunlar tuş göndermeden çalışır.
 - **Kısayol** ve **metin yaz** aksiyonları (Discord tuşları dahil) engellenir. Tablet bunu kırmızı bir hata ve oyunun adıyla bildirir.
 
-Çözüm: agent'ı **yönetici olarak** başlatın: Başlat → **TabDeck Agent (yönetici)**, ya da `agent.json` içinde `"runAsAdmin": true`. Kurulumda "Açılışta yönetici olarak başlat" seçeneği de vardır; UAC ayarınıza göre her açılışta onay isteyebilir. Yönetici modunda tabletten gelen tuşlar yönetici yetkisiyle gönderildiği için token'ı kimseyle paylaşmayın.
+Çözüm: agent penceresinde **Yönetici olarak yeniden başlat**'a basın; her seferinde yönetici olarak açılması için Ayarlar'da **Yönetici olarak çalıştır**'ı işaretleyin. UAC ayarınıza göre her açılışta onay isteyebilir. Yönetici modunda tabletten gelen tuşlar yönetici yetkisiyle gönderildiği için token'ı kimseyle paylaşmayın.
 
 **OBS için:** OBS → Araçlar → WebSocket Sunucu Ayarları → "WebSocket sunucusunu etkinleştir". Şifre koyduysanız `obsPassword` alanına yazıp agent'ı yeniden başlatın.
 
@@ -85,13 +91,14 @@ Tüm isteklerde `X-Token: <token>` başlığı gerekir.
 | `POST /action` | gövde `{"type":"hotkey\|text\|launch\|media\|appvolume\|obs","value":"…","arg":"…","arg2":"…"}` |
 | `GET /audio/apps` | `{"ok":true,"apps":[{"name":"Spotify","title":"Spotify","level":80,"muted":false}]}` |
 | `GET /obs/scenes`, `GET /obs/inputs` | `{"ok":true,"scenes":[…]}` / `{"ok":true,"inputs":[…]}` |
+| `GET /obs/cycle` | `{"ok":true,"cycle":true,"key":"Sahne 1\nSahne 2","remaining":252,"scene":"Sahne 1"}` |
 | `GET /apps` | `{"ok":true,"apps":[{"id":"…","name":"…"}]}` |
 | `GET /appicon?id=<id>&size=<16-256>` | PNG |
 
 ## Derleme
 
 - **Android** (`android/`): JDK 17, Android SDK 34, Gradle 8.10+ → `gradle assembleDebug`. Release imzası `android/keystore.properties` dosyasından okunur (depoda yok).
-- **PC agent** (`agent/TabDeckAgent.cs`): Windows'taki hazır .NET Framework derleyicisiyle `agent\build.bat`; ek kurulum gerekmez.
+- **PC agent** (`agent/*.cs`, arayüz `AgentUI.cs`): Windows'taki hazır .NET Framework derleyicisiyle `agent\build.bat`; ek kurulum gerekmez.
 - **Kurulum dosyası** (`installer/TabDeckAgent.nsi`): NSIS 3 → `makensis -DVERSION=1.0.0 -DSRC=<klasör> -DOUTFILE=<çıktı.exe> installer/TabDeckAgent.nsi`
 - **Marka ikonları** (`tools/`): `npm install` ve `node gen-brand-icons.mjs brand-icons.txt ../android/app/src/main/assets/brand_icons.json`
 

@@ -46,6 +46,7 @@ fun presetPacks(): List<PresetPack> = listOf(
             btn("OBS'i aç", "si:obsstudio", OBS, "launch", "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe"),
             btn("Sahne 1", "🎬", 0xFF3949AB, "obs", "scene", "Sahne"),
             btn("Sahne 2", "🎬", 0xFF3949AB, "obs", "scene", "Sahne 2"),
+            btn("Sahne döngüsü", "🔁", 0xFF3949AB, "obs", "cycle", "Sahne\nSahne 2", "5"),
             btn("Kamera göster/gizle", "👁️", OBS, "obs", "source", "", "Kamera"),
             btn("Kaydı böl", "✂️", OBS, "obs", "split"),
             btn("Yayını başlat", "▶️", OBS_RED, "obs", "streamStart"),
